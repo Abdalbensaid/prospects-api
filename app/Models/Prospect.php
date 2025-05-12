@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Prospect extends Model
 {
-    use HasFactory;
+    use HasFactory, Notifiable;
 
     protected $fillable = [
         'first_name', 'last_name', 'username', 'phone', 'tags', 'activity'

@@ -69,6 +69,11 @@ class AuthController extends Controller
             'email' => $user->email
         ]);
 
-        return $token;
+        return response()->json([
+            'access_token' => $token,
+            'token_type' => 'Bearer',
+            'user' => $user
+        ]);
+
     }
 }
