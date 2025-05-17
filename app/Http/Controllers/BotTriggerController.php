@@ -8,54 +8,33 @@ use Illuminate\Support\Facades\Log; // 👈 on importe Log
 
 class BotTriggerController extends Controller
 {
+
     public function start(Request $request)
     {
-        // 🔍 Étape 1 : Valider les données reçues
-        $validated = $request->validate([
+        $request->validate([
             'group_link' => 'required|url',
             'tags' => 'array',
             'countries' => 'array',
         ]);
 
-        // 📋 Log des données envoyées
-        Log::info('📤 Tentative de déclenchement du bot', [
-            'group_link' => $validated['group_link'],
-            'tags' => $validated['tags'],
-            'countries' => $validated['countries'],
+        Log::channel('prospection_bot')->info("📤 Tentative de démarrage du bot", $request->all());
+
+        $response = Http::post(env('PYTHON_BOT_URL') . '/start-prospection', [
+            'group_link' => $request->group_link,
+            'keywords' => $request->tags,
+            'countries' => $request->countries,
         ]);
 
-        try {
-            // 📡 Envoi vers le bot Python via Flask
-            $response = Http::post(env('PYTHON_BOT_URL') . '/start-prospection', [
-                'group_link' => $validated['group_link'],
-                'keywords' => $validated['tags'], // côté bot c'est 'keywords'
-                'countries' => $validated['countries'],
-            ]);
+        Log::channel('prospection_bot')->info("📬 Réponse du bot", [
+            'status' => $response->status(),
+            'body' => $response->body()
+        ]);
 
-            // ✅ Log de la réponse
-            Log::info('📬 Réponse du bot', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
-
-            if ($response->successful()) {
-                return response()->json(['message' => '✅ Prospection lancée avec succès'], 200);
-            }
-
-            // ❌ Log si le bot a répondu avec une erreur
-            Log::error('🚨 Échec : Réponse du bot invalide', [
-                'status' => $response->status(),
-                'body' => $response->body(),
-            ]);
-
-        } catch (\Exception $e) {
-            // ❌ Log si une exception s'est produite
-            Log::error('💥 Exception lors de la tentative de prospection', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+        if ($response->successful()) {
+            return response()->json(['message' => '✅ Prospection lancée avec succès'], 200);
         }
 
         return response()->json(['message' => '❌ Échec du déclenchement du bot'], 500);
     }
+
 }

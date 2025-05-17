@@ -127,6 +127,12 @@ return [
             'path' => storage_path('logs/laravel.log'),
         ],
 
+        'prospection_bot' => [
+        'driver' => 'single',
+        'path' => storage_path('logs/prospection_bot.log'),
+        'level' => 'debug',
+            ],
+
     ],
 
 ];
