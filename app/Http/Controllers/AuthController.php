@@ -11,28 +11,30 @@ class AuthController extends Controller
 {
     public function register(Request $request)
     {
+        $start = microtime(true); // pour mesurer la durée
+
+        Log::info('📩 [Register] Début de l\'inscription', ['email' => $request->email]);
+
         try {
-            Log::info('Début du processus d\'inscription', ['email' => $request->email]);
-            
             $request->validate([
                 'name' => 'required',
                 'email' => 'required|email|unique:users',
                 'password' => 'required|min:6',
             ]);
-
-            Log::debug('Validation des données d\'inscription réussie');
+            Log::debug('✅ [Register] Données validées');
 
             $user = User::create([
                 'name' => $request->name,
                 'email' => $request->email,
                 'password' => Hash::make($request->password)
             ]);
-
-            Log::info('Utilisateur créé avec succès', ['user_id' => $user->id]);
+            Log::info('👤 [Register] Utilisateur créé', ['user_id' => $user->id]);
 
             $token = $user->createToken('auth_token')->plainTextToken;
+            Log::debug('🔐 [Register] Token généré', ['user_id' => $user->id]);
 
-            Log::debug('Token d\'authentification généré pour l\'utilisateur', ['user_id' => $user->id]);
+            $duration = round((microtime(true) - $start) * 1000, 2);
+            Log::info('✅ [Register] Succès en '.$duration.'ms');
 
             return response()->json([
                 'access_token' => $token,
@@ -41,14 +43,14 @@ class AuthController extends Controller
             ], 201);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
-            Log::error('Erreur de validation lors de l\'inscription', [
+            Log::error('❌ [Register] Erreur validation', [
                 'errors' => $e->errors(),
                 'input' => $request->all()
             ]);
             throw $e;
-            
+
         } catch (\Exception $e) {
-            Log::error('Erreur lors de l\'inscription', [
+            Log::error('❌ [Register] Exception', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
@@ -58,26 +60,32 @@ class AuthController extends Controller
 
     public function login(Request $request)
     {
-        try {
-            Log::info('Tentative de connexion', ['email' => $request->email]);
+        $start = microtime(true);
 
+        Log::info('🔐 [Login] Tentative de connexion', ['email' => $request->email]);
+
+        try {
             $user = User::where('email', $request->email)->first();
 
             if (!$user) {
-                Log::warning('Tentative de connexion avec email inconnu', ['email' => $request->email]);
+                Log::warning('⚠️ [Login] Email inconnu', ['email' => $request->email]);
                 return response()->json(['message' => 'Invalid credentials'], 401);
             }
 
             if (!Hash::check($request->password, $user->password)) {
-                Log::warning('Tentative de connexion avec mot de passe incorrect', ['email' => $request->email, 'user_id' => $user->id]);
+                Log::warning('Mot de passe incorrect');
                 return response()->json(['message' => 'Invalid credentials'], 401);
             }
 
-            Log::debug('Authentification réussie', ['user_id' => $user->id]);
+            // ✅ Ajout important ici
+            auth()->login($user);
 
             $token = $user->createToken('auth_token')->plainTextToken;
 
-            Log::debug('Token de connexion généré', ['user_id' => $user->id]);
+            Log::debug('🔐 [Login] Token généré', ['user_id' => $user->id]);
+
+            $duration = round((microtime(true) - $start) * 1000, 2);
+            Log::info('✅ [Login] Connexion terminée en '.$duration.'ms', ['user_id' => $user->id]);
 
             return response()->json([
                 'access_token' => $token,
@@ -86,7 +94,7 @@ class AuthController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error('Erreur lors de la connexion', [
+            Log::error('❌ [Login] Exception', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);

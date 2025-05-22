@@ -46,4 +46,10 @@ class User extends Authenticatable
             'password' => 'hashed',
         ];
     }
+
+    public function telegramAccounts()
+    {
+        return $this->hasMany(TelegramAccount::class);
+    }
+
 }

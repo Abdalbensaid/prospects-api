@@ -1,135 +1,150 @@
 <?php
 
 namespace App\Http\Controllers;
+
 use App\Models\TelegramAccount;
-use Illuminate\Http\Request; // Pour gérer les données entrantes depuis les formulaires
-use Illuminate\Support\Facades\Log; // Pour écrire dans les logs Laravel
-use Symfony\Component\Process\Process; // Pour exécuter un script externe (ici Python)
-use Symfony\Component\Process\Exception\ProcessFailedException; // Pour gérer les erreurs si le script échoue
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
+use Symfony\Component\Process\Process;
+use Symfony\Component\Process\Exception\ProcessFailedException;
 
 class AuthTelegramController extends Controller
 {
-    // Affiche le formulaire de saisie du numéro de téléphone (étape 1)
     public function showPhoneForm()
     {
-        return view('telegram.login'); // Va chercher resources/views/telegram/login.blade.php
+        Log::info('[Telegram] Affichage du formulaire de numéro de téléphone');
+        return view('telegram.login');
     }
 
-    // Envoie le code Telegram au numéro saisi (via script Python send_code.py)
     public function sendCode(Request $request)
     {
-        $phone = $request->input('phone'); // Récupère le numéro depuis le formulaire
+        $phone = $request->input('phone');
+        Log::info('[Telegram] Envoi du code demandé', ['phone' => $phone]);
 
-        $script = base_path('app/Scripts/send_code.py'); // Chemin complet vers le script Python
+        $script = base_path('app/Scripts/send_code.py');
+        $command = ['/home/abdalbensaid/venv/bin/python3', $script, $phone];
+        Log::debug('[Telegram] Commande exécutée : ' . implode(' ', $command));
 
-        // Crée un processus pour exécuter le script avec l'interpréteur Python + le numéro
-        $process = new Process([
-            '/home/abdalbensaid/venv/bin/python3', // Python depuis ton venv
-            $script,
-            $phone
-        ]);
+        $process = new Process($command);
 
         try {
-            $process->mustRun(); // Exécute le script et lance une exception si ça échoue
-            $output = $process->getOutput(); // Récupère la sortie du script
-            Log::debug('Code envoyé : ' . $output); // Écrit dans les logs Laravel pour debug
+            $process->mustRun();
 
-            // Redirige vers le formulaire de vérification avec le numéro conservé en session
-            return redirect('/telegram/verify')->with('phone', $phone);
+            $hash = trim($process->getOutput());
+            Log::info('[Telegram] Code envoyé avec succès', ['hash' => $hash]);
 
+            session([
+                'phone' => $phone,
+                'phone_code_hash' => $hash
+            ]);
+
+            return redirect('/telegram/verify');
         } catch (ProcessFailedException $e) {
-            Log::error('Erreur envoi code : ' . $e->getMessage()); // Log l'erreur exacte
-            return back()->with('error', 'Échec de l’envoi du code.'); // Retourne à la page précédente avec message
+            Log::error('[Telegram] Échec envoi du code', [
+                'message' => $e->getMessage(),
+                'stderr' => $process->getErrorOutput()
+            ]);
+            return back()->with('error', 'Échec de l’envoi du code.');
         }
     }
 
-    // Affiche le formulaire pour entrer le code reçu (étape 2)
     public function showCodeForm()
     {
-        $phone = session('phone'); // Récupère le numéro de la session (envoyé depuis sendCode)
-        return view('telegram.verify', compact('phone')); // Affiche la vue avec le numéro
+        $phone = session('phone');
+        Log::info('[Telegram] Affichage du formulaire de vérification', ['phone' => $phone]);
+
+        return view('telegram.verify', compact('phone'));
     }
 
-    // Vérifie le code entré par l’utilisateur (via script Python verify_code.py)
     public function verifyCode(Request $request)
     {
-        $phone = $request->input('phone'); // Numéro saisi (masqué) dans le formulaire
-        $code = $request->input('code');   // Code reçu par Telegram et saisi par l’utilisateur
+        $phone = session('phone');
+        $code = $request->input('code');
+        $hash = session('phone_code_hash');
 
-        $script = base_path('app/Scripts/verify_code.py'); // Chemin vers le script Python
+        $script = base_path('app/Scripts/verify_code.py');
 
-        // Crée un processus pour exécuter le script Python avec le numéro + code
+        // Récupération de l'utilisateur connecté
+        $user = Auth::user();
+
+        if (!$user) {
+            Log::warning('[Telegram] Aucun utilisateur connecté lors de la vérification');
+            return back()->with('error', 'Aucun utilisateur connecté.');
+        }
+
+        Log::info('[Telegram] Vérification du code reçu', [
+            'phone' => $phone,
+            'code' => $code,
+            'hash' => $hash,
+            'user_id' => $user->id
+        ]);
+
         $process = new Process([
             '/home/abdalbensaid/venv/bin/python3',
             $script,
             $phone,
-            $code
+            $code,
+            $hash
         ]);
 
+        Log::debug('[Telegram] Commande exécutée pour vérification : ' . $process->getCommandLine());
+
         try {
-            $process->mustRun(); // Lance le script et vérifie que tout se passe bien
-            // Génère le nom du fichier de session
+            $process->mustRun();
+            $output = $process->getOutput();
+
+            Log::info('[Telegram] Code vérifié avec succès', ['output' => trim($output)]);
+
+            // Nom du fichier de session Telegram (ex: 2250151995872.session)
             $sessionFile = str_replace(['+', ' '], '', $phone) . '.session';
 
-            // Enregistre ou met à jour le compte dans la base
+            // Log du contenu avant enregistrement
+            Log::debug('[Telegram] Données à enregistrer dans la base telegram_accounts', [
+                'phone' => $phone,
+                'session_file' => $sessionFile,
+                'authorized' => true,
+                'user_id' => $user->id
+            ]);
+
+            // Insertion/MAJ du compte dans la base
             TelegramAccount::updateOrCreate(
-                ['phone' => $phone],
+                [
+                    'phone' => $phone,
+                    'user_id' => $user->id
+                ],
                 [
                     'session_file' => $sessionFile,
-                    'authorized' => true
+                    'authorized' => true,
+                    'user_id' => $user->id // ← essentiel pour éviter l’erreur SQL
                 ]
             );
 
-            $output = $process->getOutput(); // Récupère le message de succès
-            Log::debug('Vérification code : ' . $output); // Écrit dans les logs pour trace
-
-            // Redirige vers la page de scraping après succès
             return redirect('/scraper-form')->with('success', 'Connexion réussie.');
 
         } catch (ProcessFailedException $e) {
-            Log::error('Échec vérification code : ' . $e->getMessage()); // Log l’erreur
-            return back()->with('error', 'Échec de la connexion.'); // Retourne à la saisie du code
+            Log::error('[Telegram] Échec vérification code', [
+                'message' => $e->getMessage(),
+                'output' => $process->getOutput(),
+                'error_output' => $process->getErrorOutput()
+            ]);
+
+            return back()->with('error', 'Échec de la connexion.');
         }
     }
 
+
     public function listAccounts()
     {
-        $accounts = TelegramAccount::where('authorized', true)->get();
+        $user = Auth::user();
+        if (!$user) {
+            Log::warning('[Telegram] Tentative d\'accès à la liste de sessions sans authentification');
+            return redirect('/login');
+        }
+
+        Log::info('[Telegram] Récupération des comptes Telegram de l\'utilisateur', ['user_id' => $user->id]);
+
+        $accounts = $user->telegramAccounts()->where('authorized', true)->get();
         return view('telegram.sessions', compact('accounts'));
     }
-    public function scrapeFromSession(Request $request)
-{
-    $phone = $request->input('phone');
-    $account = TelegramAccount::where('phone', $phone)->first();
-
-    if (!$account || !$account->authorized) {
-        return back()->with('error', 'Compte non trouvé ou non autorisé.');
-    }
-
-    $groupLink = 'https://t.me/codingtuto'; // Par défaut, à rendre dynamique plus tard
-
-    $scriptPath = base_path('app/Scripts/scraper.py');
-
-    $process = new Process([
-        '/home/abdalbensaid/venv/bin/python3',
-        $scriptPath,
-        $groupLink,
-        $account->session_file // On passe le fichier session
-    ]);
-
-    try {
-        $process->mustRun();
-        $output = $process->getOutput();
-        $json = json_decode($output, true);
-
-        return view('scraper.form', [
-            'members' => $json['members'] ?? [],
-            'groupLink' => $groupLink
-        ]);
-
-    } catch (ProcessFailedException $e) {
-        return back()->with('error', 'Erreur lors du scraping.');
-    }
-}
-
 }
